@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planning Poker</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="landing-page">
+
+  <div class="landing-container">
+    <header class="landing-header">
+      <div class="logo-mark">♠</div>
+      <h1>Planning Poker</h1>
+      <p class="tagline">Collaborative story point estimation for agile teams</p>
+    </header>
+
+    <div class="landing-cards">
+
+      <!-- Create Session -->
+      <div class="landing-card">
+        <div class="landing-card-icon">✦</div>
+        <h2>Create a Session</h2>
+        <p>Set up a new session, add your user stories, and invite your team.</p>
+        <form id="create-form">
+          <div class="field">
+            <label for="organiser-name">Your name</label>
+            <input
+              id="organiser-name"
+              type="text"
+              placeholder="e.g. Sarah"
+              maxlength="40"
+              autocomplete="off"
+              required
+            >
+          </div>
+          <button type="submit" class="btn btn-primary btn-block" id="create-btn">
+            Create Session
+          </button>
+          <p id="create-error" class="form-error hidden"></p>
+        </form>
+      </div>
+
+      <!-- Join Session -->
+      <div class="landing-card">
+        <div class="landing-card-icon">⤵</div>
+        <h2>Join a Session</h2>
+        <p>Enter the session code shared by your organiser and jump straight in.</p>
+        <form id="join-form">
+          <div class="field">
+            <label for="session-code">Session code</label>
+            <input
+              id="session-code"
+              type="text"
+              placeholder="e.g. ABC123"
+              maxlength="6"
+              autocomplete="off"
+              spellcheck="false"
+              style="text-transform: uppercase; letter-spacing: 0.15em;"
+              required
+            >
+          </div>
+          <div class="field">
+            <label for="participant-name">Your name</label>
+            <input
+              id="participant-name"
+              type="text"
+              placeholder="e.g. Alex"
+              maxlength="40"
+              autocomplete="off"
+              required
+            >
+          </div>
+          <button type="submit" class="btn btn-secondary btn-block" id="join-btn">
+            Join Session
+          </button>
+          <p id="join-error" class="form-error hidden"></p>
+        </form>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const createForm = document.getElementById('create-form');
+    const joinForm   = document.getElementById('join-form');
+    const createErr  = document.getElementById('create-error');
+    const joinErr    = document.getElementById('join-error');
+
+    function showError(el, msg) {
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+    function hideError(el) {
+      el.classList.add('hidden');
+    }
+
+    createForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError(createErr);
+      const name = document.getElementById('organiser-name').value.trim();
+      if (!name) return;
+
+      const btn = document.getElementById('create-btn');
+      btn.disabled = true;
+      btn.textContent = 'Creating…';
+
+      try {
+        const res = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ organiserName: name }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to create session');
+
+        sessionStorage.setItem('pp_name', name);
+        sessionStorage.setItem('pp_token', data.organiserToken);
+
+        window.location.href = `/session.html?id=${data.sessionId}`;
+      } catch (err) {
+        showError(createErr, err.message);
+        btn.disabled = false;
+        btn.textContent = 'Create Session';
+      }
+    });
+
+    joinForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      hideError(joinErr);
+      const code = document.getElementById('session-code').value.trim().toUpperCase();
+      const name = document.getElementById('participant-name').value.trim();
+      if (!code || !name) return;
+
+      sessionStorage.setItem('pp_name', name);
+      // No organiser token for regular participants
+      sessionStorage.removeItem('pp_token');
+
+      window.location.href = `/session.html?id=${code}`;
+    });
+
+    // Auto-uppercase session code field
+    document.getElementById('session-code').addEventListener('input', function () {
+      this.value = this.value.toUpperCase();
+    });
+  </script>
+
+</body>
+</html>

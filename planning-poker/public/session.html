@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planning Poker</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="session-page">
+
+  <!-- Name entry modal (shown when name not in sessionStorage) -->
+  <div id="name-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2>Join this session</h2>
+      <form id="name-form">
+        <div class="field">
+          <label for="modal-name">Your name</label>
+          <input id="modal-name" type="text" placeholder="e.g. Alex" maxlength="40" autocomplete="off" required>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Join</button>
+        <p id="modal-error" class="form-error hidden"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast notifications -->
+  <div id="toast-area" class="toast-area"></div>
+
+  <!-- App shell -->
+  <div class="app-shell">
+
+    <!-- Header -->
+    <header class="app-header">
+      <a href="/" class="app-logo">♠ Planning Poker</a>
+
+      <div class="session-id-block">
+        <span class="session-id-label">Session</span>
+        <code id="hdr-session-id" class="session-id-code">———</code>
+        <button class="btn-icon" id="btn-copy" title="Copy invite link">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="hdr-right">
+        <span id="hdr-role" class="hdr-badge"></span>
+        <span id="hdr-name" class="hdr-name"></span>
+      </div>
+    </header>
+
+    <!-- Body: sidebar + main -->
+    <div class="app-body">
+
+      <aside class="sidebar">
+        <h3 class="sidebar-heading">Participants</h3>
+        <ul id="participant-list" class="participant-list"></ul>
+      </aside>
+
+      <main id="main-content" class="main-content">
+        <div class="loading-state">Connecting…</div>
+      </main>
+
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+  (() => {
+    'use strict';
+
+    // ── Bootstrap ────────────────────────────────────────────────────────────
+
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = (params.get('id') || '').trim().toUpperCase();
+    if (!sessionId) { window.location.href = '/'; return; }
+
+    let myName  = sessionStorage.getItem('pp_name') || '';
+    let myToken = sessionStorage.getItem('pp_token') || '';
+    let session = null;
+
+    const socket = io();
+
+    // ── DOM refs ─────────────────────────────────────────────────────────────
+
+    const $main     = document.getElementById('main-content');
+    const $pList    = document.getElementById('participant-list');
+    const $hdrId    = document.getElementById('hdr-session-id');
+    const $hdrName  = document.getElementById('hdr-name');
+    const $hdrRole  = document.getElementById('hdr-role');
+    const $copyBtn  = document.getElementById('btn-copy');
+    const $modal    = document.getElementById('name-modal');
+    const $nameForm = document.getElementById('name-form');
+    const $nameErr  = document.getElementById('modal-error');
+
+    // ── Toast ─────────────────────────────────────────────────────────────────
+
+    function toast(msg, type = 'info') {
+      const $t = document.getElementById('toast-area');
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      $t.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('toast-show'));
+      setTimeout(() => {
+        el.classList.remove('toast-show');
+        el.addEventListener('transitionend', () => el.remove());
+      }, 3500);
+    }
+
+    // ── Joining ───────────────────────────────────────────────────────────────
+
+    function joinSession(name, token) {
+      socket.emit('join-session', { id: sessionId, name, organiserToken: token || null }, (res) => {
+        if (!res.ok) {
+          if ($modal.classList.contains('hidden')) {
+            showNameModal(res.error);
+          } else {
+            showModalError(res.error);
+          }
+          return;
+        }
+        $modal.classList.add('hidden');
+        myName = name;
+        myToken = token;
+        sessionStorage.setItem('pp_name', name);
+        if (token) sessionStorage.setItem('pp_token', token);
+        $hdrName.textContent = name;
+        $hdrRole.textContent = res.isOrganiser ? 'Organiser' : 'Participant';
+        $hdrRole.className = 'hdr-badge ' + (res.isOrganiser ? 'badge-organiser' : 'badge-participant');
+      });
+    }
+
+    function showNameModal(errorMsg) {
+      $modal.classList.remove('hidden');
+      if (errorMsg) showModalError(errorMsg);
+      document.getElementById('modal-name').focus();
+    }
+
+    function showModalError(msg) {
+      $nameErr.textContent = msg;
+      $nameErr.classList.remove('hidden');
+    }
+
+    $nameForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      $nameErr.classList.add('hidden');
+      const name = document.getElementById('modal-name').value.trim();
+      if (!name) return;
+      joinSession(name, '');
+    });
+
+    // On socket connect (or reconnect), join the session
+    socket.on('connect', () => {
+      if (myName) {
+        joinSession(myName, myToken);
+      } else {
+        showNameModal();
+      }
+    });
+
+    socket.on('disconnect', () => {
+      toast('Connection lost — reconnecting…', 'warn');
+    });
+
+    // ── Copy invite link ──────────────────────────────────────────────────────
+
+    $copyBtn.addEventListener('click', () => {
+      const link = window.location.href;
+      navigator.clipboard.writeText(link).then(() => toast('Invite link copied!', 'success'));
+    });
+
+    $hdrId.textContent = sessionId;
+
+    // ── Main render ───────────────────────────────────────────────────────────
+
+    socket.on('session-updated', (s) => {
+      const prev = session;
+      session = s;
+      renderSidebar(s);
+      renderMain(s);
+      // Announce participant changes
+      if (prev) notifyChanges(prev, s);
+    });
+
+    function notifyChanges(prev, next) {
+      const prevNames = new Set(prev.participants.map(p => p.name));
+      const nextNames = new Set(next.participants.map(p => p.name));
+      for (const n of nextNames) if (!prevNames.has(n)) toast(`${n} joined`, 'info');
+      for (const n of prevNames) if (!nextNames.has(n)) toast(`${n} left`, 'warn');
+    }
+
+    // ── Sidebar ───────────────────────────────────────────────────────────────
+
+    function renderSidebar(s) {
+      const inVoting = s.state === 'voting';
+      $pList.innerHTML = s.participants.map(p => {
+        let status = '';
+        if (inVoting) {
+          status = p.hasVoted
+            ? '<span class="p-voted">✓</span>'
+            : '<span class="p-waiting">…</span>';
+        }
+        return `<li class="p-item${p.isSelf ? ' p-self' : ''}">
+          <span class="p-name">${esc(p.name)}${p.isOrganiser ? ' <span class="p-org-badge">host</span>' : ''}</span>
+          ${status}
+        </li>`;
+      }).join('');
+    }
+
+    // ── Main content dispatcher ───────────────────────────────────────────────
+
+    function renderMain(s) {
+      switch (s.state) {
+        case 'setup':    renderSetup(s);    break;
+        case 'voting':   renderVoting(s);   break;
+        case 'reveal':   renderReveal(s);   break;
+        case 'complete': renderComplete(s); break;
+      }
+    }
+
+    // ── Setup view ────────────────────────────────────────────────────────────
+
+    function renderSetup(s) {
+      if (s.isOrganiser) {
+        $main.innerHTML = `
+          <div class="setup-layout">
+            <section class="panel">
+              <h2 class="panel-title">User Stories</h2>
+              <p class="panel-sub">Add the stories your team will estimate today.</p>
+
+              <form id="story-form" class="story-form">
+                <div class="field">
+                  <label>Title <span class="req">*</span></label>
+                  <input id="s-title" type="text" placeholder="As a user, I want to…" maxlength="120" autocomplete="off" required>
+                </div>
+                <div class="field">
+                  <label>Description <span class="opt">(optional)</span></label>
+                  <textarea id="s-desc" placeholder="Acceptance criteria, context, links…" rows="3" maxlength="600"></textarea>
+                </div>
+                <button type="submit" class="btn btn-secondary">+ Add Story</button>
+                <p id="story-error" class="form-error hidden"></p>
+              </form>
+
+              <ul id="story-list" class="story-list">
+                ${renderStoryItems(s.stories, true)}
+              </ul>
+            </section>
+
+            <section class="panel panel-right">
+              <h2 class="panel-title">Waiting Room</h2>
+              <p class="panel-sub">
+                Share the code <strong>${esc(s.id)}</strong> or the page URL with your team.
+              </p>
+              <div class="participant-count-display">
+                <span class="pcount-number">${s.participants.length}</span>
+                <span class="pcount-label">participant${s.participants.length !== 1 ? 's' : ''} connected</span>
+              </div>
+
+              <div class="start-block">
+                <button
+                  id="btn-start"
+                  class="btn btn-primary btn-block"
+                  ${s.stories.length === 0 ? 'disabled' : ''}
+                >
+                  Start Session →
+                </button>
+                ${s.stories.length === 0 ? '<p class="hint">Add at least one story to start.</p>' : ''}
+              </div>
+            </section>
+          </div>
+        `;
+
+        document.getElementById('story-form').addEventListener('submit', (e) => {
+          e.preventDefault();
+          const title = document.getElementById('s-title').value.trim();
+          const desc  = document.getElementById('s-desc').value.trim();
+          const errEl = document.getElementById('story-error');
+          errEl.classList.add('hidden');
+          if (!title) return;
+          socket.emit('add-story', { title, desc }, (res) => {
+            if (res?.ok === false) { errEl.textContent = res.error; errEl.classList.remove('hidden'); return; }
+            document.getElementById('s-title').value = '';
+            document.getElementById('s-desc').value  = '';
+          });
+        });
+
+        document.getElementById('story-list').addEventListener('click', (e) => {
+          const btn = e.target.closest('[data-remove]');
+          if (btn) socket.emit('remove-story', { storyId: btn.dataset.remove });
+        });
+
+        document.getElementById('btn-start')?.addEventListener('click', () => {
+          socket.emit('start-session', (res) => {
+            if (res?.ok === false) toast(res.error, 'error');
+          });
+        });
+
+      } else {
+        $main.innerHTML = `
+          <div class="waiting-view">
+            <div class="waiting-icon">⏳</div>
+            <h2>Waiting for the organiser to start…</h2>
+            <p class="waiting-sub">Sit tight — the session will begin shortly.</p>
+            ${s.stories.length > 0 ? `
+              <div class="panel stories-preview">
+                <h3>Stories to estimate (${s.stories.length})</h3>
+                <ul class="story-preview-list">
+                  ${s.stories.map((st, i) => `
+                    <li>
+                      <span class="story-num">${i + 1}</span>
+                      <span class="story-preview-title">${esc(st.title)}</span>
+                    </li>
+                  `).join('')}
+                </ul>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+    }
+
+    function renderStoryItems(stories, withRemove) {
+      if (stories.length === 0) {
+        return '<li class="story-empty">No stories yet. Add one above.</li>';
+      }
+      return stories.map((st, i) => `
+        <li class="story-item" data-id="${st.id}">
+          <span class="story-num">${i + 1}</span>
+          <div class="story-text">
+            <span class="story-item-title">${esc(st.title)}</span>
+            ${st.description ? `<span class="story-item-desc">${esc(st.description)}</span>` : ''}
+          </div>
+          ${withRemove ? `<button class="btn-remove" data-remove="${st.id}" title="Remove">✕</button>` : ''}
+        </li>
+      `).join('');
+    }
+
+    // ── Voting view ───────────────────────────────────────────────────────────
+
+    function renderVoting(s) {
+      const story    = s.currentStory;
+      const progress = `Story ${s.currentStoryIndex + 1} of ${s.stories.length}`;
+      const pct      = s.totalCount > 0 ? Math.round((s.votedCount / s.totalCount) * 100) : 0;
+
+      $main.innerHTML = `
+        <div class="voting-view">
+          <div class="story-progress-bar">
+            <span class="progress-label">${esc(progress)}</span>
+            <div class="progress-track">
+              ${s.stories.map((st, i) => `
+                <div class="progress-pip ${i < s.currentStoryIndex ? 'done' : i === s.currentStoryIndex ? 'active' : ''}" title="${esc(st.title)}"></div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="story-card panel">
+            <h2 class="story-card-title">${esc(story.title)}</h2>
+            ${story.description ? `<p class="story-card-desc">${esc(story.description)}</p>` : ''}
+          </div>
+
+          <div class="vote-status">
+            <div class="vote-bar-wrap">
+              <div class="vote-bar" style="width: ${pct}%"></div>
+            </div>
+            <span class="vote-count-label">${s.votedCount} of ${s.totalCount} voted</span>
+          </div>
+
+          <div class="cards-section">
+            <h3 class="cards-heading">${s.myHasVoted ? 'Your vote' : 'Pick your estimate'}</h3>
+            <div class="cards-grid">
+              ${s.cardValues.map(v => `
+                <button
+                  class="poker-card${s.myVote === v ? ' selected' : ''}"
+                  data-value="${v}"
+                >
+                  <span class="card-val">${v}</span>
+                </button>
+              `).join('')}
+            </div>
+            ${s.myHasVoted ? `<p class="voted-note">You voted <strong>${esc(s.myVote)}</strong>. You can change your vote until votes are revealed.</p>` : ''}
+          </div>
+
+          ${s.isOrganiser ? `
+            <div class="organiser-bar">
+              <button id="btn-reveal" class="btn btn-secondary"
+                ${s.votedCount === 0 ? 'disabled' : ''}>
+                Reveal Votes
+              </button>
+              <span class="hint">Or wait for everyone to vote — cards will flip automatically.</span>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      $main.querySelectorAll('.poker-card').forEach(card => {
+        card.addEventListener('click', () => {
+          socket.emit('submit-vote', { value: card.dataset.value });
+        });
+      });
+
+      document.getElementById('btn-reveal')?.addEventListener('click', () => {
+        socket.emit('reveal-votes');
+      });
+    }
+
+    // ── Reveal view ───────────────────────────────────────────────────────────
+
+    function renderReveal(s) {
+      const story      = s.currentStory;
+      const votes      = s.participants.filter(p => p.vote !== null);
+      const numericVotes = votes
+        .map(p => parseFloat(p.vote))
+        .filter(v => !isNaN(v));
+
+      const avg  = numericVotes.length ? (numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length).toFixed(1) : '—';
+      const min  = numericVotes.length ? Math.min(...numericVotes) : '—';
+      const max  = numericVotes.length ? Math.max(...numericVotes) : '—';
+
+      // Unique voted values as score suggestion buttons
+      const uniqueVotes = [...new Set(votes.map(p => p.vote))].sort((a, b) => {
+        const na = parseFloat(a), nb = parseFloat(b);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return 0;
+      });
+
+      const isLastStory = s.currentStoryIndex === s.stories.length - 1;
+      const hasFinalScore = !!(story.finalScore);
+
+      $main.innerHTML = `
+        <div class="reveal-view">
+          <div class="story-card panel">
+            <div class="story-card-meta">${esc(`Story ${s.currentStoryIndex + 1} of ${s.stories.length}`)}</div>
+            <h2 class="story-card-title">${esc(story.title)}</h2>
+            ${story.description ? `<p class="story-card-desc">${esc(story.description)}</p>` : ''}
+          </div>
+
+          <div class="votes-grid">
+            ${s.participants.map(p => {
+              const hasVote = p.vote !== null;
+              return `
+                <div class="reveal-card ${hasVote ? 'has-vote' : 'no-vote'}">
+                  <div class="reveal-card-value">${hasVote ? esc(p.vote) : '?'}</div>
+                  <div class="reveal-card-name">${esc(p.name)}${p.isSelf ? ' (you)' : ''}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <div class="vote-stats panel">
+            <div class="stat-item">
+              <span class="stat-label">Average</span>
+              <span class="stat-value">${avg}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Lowest</span>
+              <span class="stat-value">${min}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Highest</span>
+              <span class="stat-value">${max}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Voters</span>
+              <span class="stat-value">${votes.length}</span>
+            </div>
+          </div>
+
+          ${hasFinalScore ? `
+            <div class="final-score-display panel">
+              <span class="final-score-label">Agreed score</span>
+              <span class="final-score-value">${esc(story.finalScore)}</span>
+            </div>
+          ` : ''}
+
+          ${s.isOrganiser ? `
+            <div class="organiser-panel panel">
+              <h3>Set the agreed score</h3>
+              <p class="panel-sub">Discuss as a team, then pick the final estimate.</p>
+              <div class="score-suggestions">
+                ${uniqueVotes.map(v => `
+                  <button class="btn-score-pick${story.finalScore === v ? ' active' : ''}" data-score="${v}">${v}</button>
+                `).join('')}
+              </div>
+              <div class="custom-score-row">
+                <input id="custom-score" type="text" placeholder="Custom score" maxlength="10" value="${story.finalScore || ''}">
+                <button id="btn-set-custom" class="btn btn-secondary">Set</button>
+              </div>
+
+              <div class="organiser-nav">
+                <button
+                  id="btn-next-story"
+                  class="btn btn-primary"
+                  ${!hasFinalScore ? 'disabled' : ''}
+                >
+                  ${isLastStory ? 'Finish Session' : 'Next Story →'}
+                </button>
+                ${!isLastStory ? `
+                  <button id="btn-end-session" class="btn btn-ghost">End Session Early</button>
+                ` : ''}
+              </div>
+              ${!hasFinalScore ? '<p class="hint">Set a score to continue.</p>' : ''}
+            </div>
+          ` : `
+            <div class="waiting-organiser panel">
+              ${hasFinalScore
+                ? `<p>Organiser set the final score to <strong>${esc(story.finalScore)}</strong>. Waiting to move on…</p>`
+                : '<p>Discuss as a team. The organiser will set the final score.</p>'
+              }
+            </div>
+          `}
+        </div>
+      `;
+
+      $main.querySelectorAll('.btn-score-pick').forEach(btn => {
+        btn.addEventListener('click', () => {
+          socket.emit('set-final-score', { score: btn.dataset.score });
+        });
+      });
+
+      document.getElementById('btn-set-custom')?.addEventListener('click', () => {
+        const val = document.getElementById('custom-score').value.trim();
+        if (val) socket.emit('set-final-score', { score: val });
+      });
+
+      document.getElementById('custom-score')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const val = e.target.value.trim();
+          if (val) socket.emit('set-final-score', { score: val });
+        }
+      });
+
+      document.getElementById('btn-next-story')?.addEventListener('click', () => {
+        socket.emit('next-story');
+      });
+
+      document.getElementById('btn-end-session')?.addEventListener('click', () => {
+        if (confirm('End the session early? Remaining stories will not be scored.')) {
+          socket.emit('end-session');
+        }
+      });
+    }
+
+    // ── Complete view ─────────────────────────────────────────────────────────
+
+    function renderComplete(s) {
+      const totalScored  = s.stories.filter(st => st.finalScore).length;
+      const totalStories = s.stories.length;
+
+      $main.innerHTML = `
+        <div class="complete-view">
+          <div class="complete-header">
+            <div class="complete-icon">✓</div>
+            <h2>Session Complete</h2>
+            <p>${totalScored} of ${totalStories} stor${totalStories !== 1 ? 'ies' : 'y'} scored</p>
+          </div>
+
+          <div class="summary-panel panel">
+            <div class="summary-toolbar">
+              <h3>Score Summary</h3>
+              <button class="btn btn-ghost btn-sm" id="btn-export">Export CSV</button>
+            </div>
+            <table class="summary-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Story</th>
+                  <th>Description</th>
+                  <th>Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${s.stories.map((st, i) => `
+                  <tr class="${st.finalScore ? '' : 'row-unscored'}">
+                    <td class="td-num">${i + 1}</td>
+                    <td class="td-title">${esc(st.title)}</td>
+                    <td class="td-desc">${esc(st.description || '—')}</td>
+                    <td class="td-score">
+                      ${st.finalScore
+                        ? `<span class="score-chip">${esc(st.finalScore)}</span>`
+                        : '<span class="score-none">—</span>'}
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="complete-actions">
+            <button class="btn btn-primary" onclick="window.print()">Print Summary</button>
+            <a href="/" class="btn btn-ghost">Start a New Session</a>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('btn-export')?.addEventListener('click', () => exportCSV(s));
+    }
+
+    function exportCSV(s) {
+      const header = ['#', 'Title', 'Description', 'Score'];
+      const rows = s.stories.map((st, i) => [
+        i + 1,
+        `"${(st.title || '').replace(/"/g, '""')}"`,
+        `"${(st.description || '').replace(/"/g, '""')}"`,
+        `"${(st.finalScore || '').replace(/"/g, '""')}"`,
+      ]);
+      const csv = [header, ...rows].map(r => r.join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `planning-poker-${s.id}.csv`;
+      a.click();
+    }
+
+    // ── Utility ───────────────────────────────────────────────────────────────
+
+    function esc(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+  })();
+  </script>
+
+</body>
+</html>
