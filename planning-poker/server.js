@@ -95,7 +95,7 @@ io.on('connection', (socket) => {
 
   // Participants and organisers both call this to enter a session room.
   // Organisers send their organiserToken so they get elevated privileges.
-  socket.on('join-session', ({ id, name, organiserToken }, cb) => {
+  socket.on('join-session', ({ id, name, organiserToken, participantToken }, cb) => {
     const sid = (id ?? '').trim().toUpperCase();
     const session = sessions.get(sid);
 
@@ -123,14 +123,17 @@ io.on('connection', (socket) => {
     } else {
       const nameLower = name.toLowerCase();
 
-      // Check for reconnect (same name already seated)
+      // A reconnect is only valid when the client presents their original token.
+      // Without the token, treat same-name as a duplicate and reject it.
       let reconnected = false;
-      for (const [oldId, p] of session.participants.entries()) {
-        if (!p.isOrganiser && p.name.toLowerCase() === nameLower) {
-          session.participants.delete(oldId);
-          session.participants.set(socket.id, p);
-          reconnected = true;
-          break;
+      if (participantToken) {
+        for (const [oldId, p] of session.participants.entries()) {
+          if (!p.isOrganiser && p.participantToken === participantToken) {
+            session.participants.delete(oldId);
+            session.participants.set(socket.id, p);
+            reconnected = true;
+            break;
+          }
         }
       }
 
@@ -140,7 +143,19 @@ io.on('connection', (socket) => {
         if (taken) {
           return cb({ ok: false, error: 'That name is already taken. Please choose another.' });
         }
-        session.participants.set(socket.id, { name: name.trim(), vote: null, hasVoted: false, isOrganiser: false });
+        const newToken = uuidv4();
+        session.participants.set(socket.id, {
+          name: name.trim(),
+          vote: null,
+          hasVoted: false,
+          isOrganiser: false,
+          participantToken: newToken,
+        });
+        currentSessionId = sid;
+        socket.join(sid);
+        cb({ ok: true, isOrganiser: false, participantToken: newToken });
+        broadcast(session);
+        return;
       }
     }
 

@@ -75,8 +75,9 @@
     const sessionId = (params.get('id') || '').trim().toUpperCase();
     if (!sessionId) { window.location.href = '/'; return; }
 
-    let myName  = sessionStorage.getItem('pp_name') || '';
-    let myToken = sessionStorage.getItem('pp_token') || '';
+    let myName             = sessionStorage.getItem('pp_name') || '';
+    let myToken            = sessionStorage.getItem('pp_token') || '';          // organiser token
+    let myParticipantToken = sessionStorage.getItem('pp_participant_token') || ''; // participant reconnect token
     let session = null;
 
     const socket = io();
@@ -111,7 +112,12 @@
     // ── Joining ───────────────────────────────────────────────────────────────
 
     function joinSession(name, token) {
-      socket.emit('join-session', { id: sessionId, name, organiserToken: token || null }, (res) => {
+      socket.emit('join-session', {
+        id: sessionId,
+        name,
+        organiserToken:    token || null,
+        participantToken:  myParticipantToken || null,
+      }, (res) => {
         if (!res.ok) {
           if ($modal.classList.contains('hidden')) {
             showNameModal(res.error);
@@ -125,6 +131,11 @@
         myToken = token;
         sessionStorage.setItem('pp_name', name);
         if (token) sessionStorage.setItem('pp_token', token);
+        // Store the participant token issued by the server so we can reconnect
+        if (res.participantToken) {
+          myParticipantToken = res.participantToken;
+          sessionStorage.setItem('pp_participant_token', res.participantToken);
+        }
         $hdrName.textContent = name;
         $hdrRole.textContent = res.isOrganiser ? 'Organiser' : 'Participant';
         $hdrRole.className = 'hdr-badge ' + (res.isOrganiser ? 'badge-organiser' : 'badge-participant');
